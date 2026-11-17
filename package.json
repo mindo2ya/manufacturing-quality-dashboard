@@ -8,7 +8,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "prestart": "npm run build",
-    "start": "node --env-file-if-exists=.env dist/main.js"
+    "start": "node --watch --env-file-if-exists=.env dist/main.js",
+    "gas:login": "npx --yes @google/clasp@3.4.1 login",
+    "gas:create": "node -e \"const fs=require('node:fs');const {spawnSync}=require('node:child_process');if(fs.existsSync('.clasp.json')){console.log('이미 프로젝트가 있습니다. 다시 만들지 않습니다.');process.exit(0)}const r=spawnSync('npx.cmd',['--yes','@google/clasp@3.4.1','create','--type','standalone','--title','tumbler-factory','--rootDir','gas'],{stdio:'inherit',shell:true});if(r.error)throw r.error;if(r.status!==0)process.exit(r.status||1);if(fs.existsSync('.clasp.json'))console.log('프로젝트를 만들었습니다.')\"",
+    "gas:push": "node -e \"const {spawnSync}=require('node:child_process');const r=spawnSync('npx.cmd',['--yes','@google/clasp@3.4.1','push','--force'],{encoding:'utf8',shell:true});const out=(r.stdout||'')+(r.stderr||'');if(out)process.stdout.write(out);if(out.includes('invalid_grant')){console.log('구글 로그인이 만료됐을 수 있습니다. npm.cmd run gas:login을 다시 하세요.');process.exit(1)}if(out.includes('Pushed')||out.includes('Script is already up to date')){console.log('Google에 코드를 올렸습니다.');process.exit(0)}if(r.error)throw r.error;process.exit(r.status||1)\"",
+    "gas:deploy": "node scripts/gas-deploy.js",
+    "gas:redeploy": "node scripts/gas-redeploy.js",
+    "gas:open": "node scripts/gas-open.js",
+    "gas:init": "node scripts/gas-init.js"
   },
   "dependencies": {
     "@nestjs/common": "11.2.7",
