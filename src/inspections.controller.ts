@@ -9,14 +9,13 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { mkdirSync, writeFileSync } from 'node:fs';
 import { randomBytes, randomUUID } from 'node:crypto';
-import path from 'node:path';
 import type { Inspection } from './inspection.types';
 import { InspectionStore } from './inspection.store';
+import type { PreparedPhoto } from './inspection.store';
+import { getStorageMode } from './storage-mode';
 
 const productIds = new Set(['P-SILVER', 'P-WHITE', 'P-BLACK']);
-const uploadDirectory = path.join(process.cwd(), 'runtime', 'uploads');
 
 interface CreateInspectionBody {
   product_id?: unknown;
@@ -42,16 +41,18 @@ export class InspectionsController {
     @Query('date') date?: string,
     @Query('decision') decision?: string,
     @Query('review') review?: string,
-  ): Inspection[] {
-    let inspections = this.store.getAll();
-    if (date) inspections = inspections.filter((item) => item.inspected_at.slice(0, 10) === date);
-    if (decision) inspections = inspections.filter((item) => item.decision === decision);
-    if (review === 'pending') return [];
-    return inspections.sort((a, b) => b.inspected_at.localeCompare(a.inspected_at));
+  ): Promise<Inspection[]> {
+    return this.store.getAll().then((allInspections) => {
+      let inspections = allInspections;
+      if (date) inspections = inspections.filter((item) => item.inspected_at.slice(0, 10) === date);
+      if (decision) inspections = inspections.filter((item) => item.decision === decision);
+      if (review === 'pending') return [];
+      return inspections.sort((a, b) => b.inspected_at.localeCompare(a.inspected_at));
+    });
   }
 
   @Post()
-  create(@Body() body: CreateInspectionBody): Inspection {
+  async create(@Body() body: CreateInspectionBody): Promise<Inspection> {
     if (!Array.isArray(body?.images) || body.images.length === 0) {
       throw new BadRequestException('사진을 골라 주세요.');
     }
@@ -70,36 +71,39 @@ export class InspectionsController {
     if (typeof body.memo !== 'string' && body.memo !== undefined) {
       throw new BadRequestException('메모를 확인하세요.');
     }
+    const weight = this.readWeight(body.weight_g);
+    if (weight !== null && weight < 0) {
+      throw new BadRequestException('중량은 0 이상의 숫자로 적어 주세요.');
+    }
 
-    const images = body.images.map((image) => this.saveImage(image));
+    const photos = body.images.map((image) => this.readImage(image));
     const inspection: Inspection = {
       inspection_id: `INSP-${this.koreanDate()}-${randomBytes(4).toString('hex')}`,
       product_id: body.product_id,
       inspected_at: body.inspected_at,
       revision: body.revision,
-      weight_g: this.readWeight(body.weight_g),
+      weight_g: weight,
       memo: typeof body.memo === 'string' ? body.memo : '',
       decision: null,
       content_version: 0,
-      images,
+      images: [],
     };
-    this.store.save(inspection);
-    return inspection;
+    return this.store.register(inspection, photos);
   }
 
   @Get(':inspectionId')
-  getOne(@Param('inspectionId') inspectionId: string): Inspection {
-    const inspection = this.store.find(inspectionId);
+  async getOne(@Param('inspectionId') inspectionId: string): Promise<Inspection> {
+    const inspection = await this.store.find(inspectionId);
     if (!inspection) throw new NotFoundException('검사를 찾을 수 없습니다.');
     return inspection;
   }
 
   @Patch(':inspectionId')
-  update(
+  async update(
     @Param('inspectionId') inspectionId: string,
     @Body() body: UpdateInspectionBody,
-  ): Inspection {
-    const inspection = this.store.find(inspectionId);
+  ): Promise<Inspection> {
+    const inspection = await this.store.find(inspectionId);
     if (!inspection) throw new NotFoundException('검사를 찾을 수 없습니다.');
 
     if (body.product_id !== undefined) {
@@ -122,7 +126,7 @@ export class InspectionsController {
     }
 
     inspection.content_version += 1;
-    this.store.save(inspection);
+    await this.store.update(inspection);
     return inspection;
   }
 
@@ -134,16 +138,14 @@ export class InspectionsController {
     return value;
   }
 
-  private saveImage(value: unknown): string {
+  private readImage(value: unknown): PreparedPhoto {
     if (typeof value !== 'string') throw new BadRequestException('사진을 확인하세요.');
     const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/.exec(value);
     if (!match) throw new BadRequestException('사진을 확인하세요.');
 
     const extension = match[1].split('/')[1].replace('jpeg', 'jpg');
     const fileName = `${randomUUID()}.${extension}`;
-    mkdirSync(uploadDirectory, { recursive: true });
-    writeFileSync(path.join(uploadDirectory, fileName), Buffer.from(match[2], 'base64'));
-    return `/uploads/${fileName}`;
+    return { name: fileName, mimeType: match[1], base64: match[2] };
   }
 
   private koreanDate(): string {

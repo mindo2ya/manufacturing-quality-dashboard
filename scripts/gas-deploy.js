@@ -1,10 +1,7 @@
 const { spawnSync } = require('node:child_process');
 const { existsSync, readFileSync, writeFileSync } = require('node:fs');
 
-const envPath = '.env';
-const existing = existsSync(envPath) ? readFileSync(envPath, 'utf8') : '';
-
-if (/^\s*GAS_WEBAPP_URL\s*=\s*\S+/m.test(existing)) {
+if (process.env.GAS_WEBAPP_URL) {
   console.log('이미 웹앱 주소가 있습니다. npm.cmd run gas:redeploy를 쓰세요.');
   process.exit(0);
 }
@@ -20,6 +17,8 @@ if (deploymentIds.length !== 1) {
   console.error('웹앱 번호를 찾지 못했습니다. 로그인이 만료됐으면 npm.cmd run gas:login을 다시 하세요.');
   process.exitCode = 1;
 } else {
+  const envPath = '.env';
+  const existing = existsSync(envPath) ? readFileSync(envPath, 'utf8') : '';
   const newline = existing.includes('\r\n') ? '\r\n' : '\n';
   const lines = existing ? existing.split(/\r?\n/) : [];
   if (existing.endsWith('\n')) lines.pop();
