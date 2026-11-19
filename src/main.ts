@@ -6,9 +6,16 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { ApiExceptionFilter } from './api-exception.filter';
 import { AppModule } from './app.module';
-import { getStorageLabel } from './storage-mode';
+import { getGeminiInfo, getStorageInfo } from './storage-mode';
 
 async function bootstrap(): Promise<void> {
+  const geminiInfo = getGeminiInfo();
+  if (geminiInfo.error) {
+    console.error(geminiInfo.error);
+    process.exitCode = 1;
+    return;
+  }
+
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const publicDirectory = path.join(process.cwd(), 'public');
   const runtimeDirectory = path.join(process.cwd(), 'runtime');
@@ -63,7 +70,7 @@ async function bootstrap(): Promise<void> {
   const port = Number(process.env.PORT ?? 4185);
   await app.listen(port, '127.0.0.1');
   console.log(`품질 대시보드 서버 실행 중: http://127.0.0.1:${port}`);
-  console.log(`저장소: ${getStorageLabel()}`);
+  console.log(`저장소: ${getStorageInfo().label}`);
 }
 
 void bootstrap();

@@ -13,7 +13,9 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import type { Inspection } from './inspection.types';
 import { InspectionStore } from './inspection.store';
 import type { PreparedPhoto } from './inspection.store';
-import { getStorageMode } from './storage-mode';
+import { GeminiResultStore } from './gemini-result.store';
+import { findPrompt } from './prompts.controller';
+import { getGeminiInfo } from './storage-mode';
 
 const productIds = new Set(['P-SILVER', 'P-WHITE', 'P-BLACK']);
 
@@ -32,9 +34,17 @@ interface UpdateInspectionBody {
   weight_g?: unknown;
 }
 
+interface StartGeminiBody {
+  revision?: unknown;
+  prompt?: unknown;
+}
+
 @Controller('api/inspections')
 export class InspectionsController {
-  constructor(private readonly store: InspectionStore) {}
+  constructor(
+    private readonly store: InspectionStore,
+    private readonly geminiResults: GeminiResultStore,
+  ) {}
 
   @Get()
   getMany(
@@ -42,11 +52,14 @@ export class InspectionsController {
     @Query('decision') decision?: string,
     @Query('review') review?: string,
   ): Promise<Inspection[]> {
-    return this.store.getAll().then((allInspections) => {
+    return this.store.getAll().then(async (allInspections) => {
       let inspections = allInspections;
       if (date) inspections = inspections.filter((item) => item.inspected_at.slice(0, 10) === date);
       if (decision) inspections = inspections.filter((item) => item.decision === decision);
-      if (review === 'pending') return [];
+      if (review === 'pending') {
+        const reviewPendingInspectionIds = await this.geminiResults.getReviewPendingInspectionIds(inspections);
+        inspections = inspections.filter((item) => reviewPendingInspectionIds.has(item.inspection_id));
+      }
       return inspections.sort((a, b) => b.inspected_at.localeCompare(a.inspected_at));
     });
   }
@@ -88,7 +101,43 @@ export class InspectionsController {
       content_version: 0,
       images: [],
     };
-    return this.store.register(inspection, photos);
+    const saved = await this.store.register(inspection, photos);
+    try {
+      await this.startGemini(saved.inspection_id, { revision: saved.revision, prompt: 'v3' });
+    } catch {
+      // 판독 시작 실패는 검사 등록을 취소하지 않습니다.
+    }
+    return saved;
+  }
+
+  @Post(':inspectionId/gemini')
+  async startGemini(
+    @Param('inspectionId') inspectionId: string,
+    @Body() body: StartGeminiBody,
+  ) {
+    const inspection = await this.store.find(inspectionId);
+    if (!inspection) throw new NotFoundException('검사를 찾을 수 없습니다.');
+
+    const mode = getGeminiInfo().mode;
+    if (mode === 'off') throw new BadRequestException('Gemini 판독이 꺼져 있습니다.');
+
+    const revision = body?.revision === undefined ? inspection.revision : body.revision;
+    if (revision !== 'Rev.A' && revision !== 'Rev.B') {
+      throw new BadRequestException('검사기준을 확인하세요.');
+    }
+    const promptName = typeof body?.prompt === 'string' ? body.prompt : 'v3';
+    const prompt = findPrompt(promptName);
+    if (!prompt) throw new BadRequestException('지시문 버전을 찾을 수 없습니다.');
+
+    if (mode === 'live') return this.geminiResults.startLive();
+    return this.geminiResults.startMock(inspection, revision, prompt.name, prompt.text);
+  }
+
+  @Get(':inspectionId/gemini')
+  async getGeminiStatus(@Param('inspectionId') inspectionId: string) {
+    const inspection = await this.store.find(inspectionId);
+    if (!inspection) throw new NotFoundException('검사를 찾을 수 없습니다.');
+    return this.geminiResults.getStatus(inspection);
   }
 
   @Get(':inspectionId')

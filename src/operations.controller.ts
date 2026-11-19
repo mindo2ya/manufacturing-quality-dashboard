@@ -1,10 +1,10 @@
 import { Controller, Get } from '@nestjs/common';
-import { getStorageLabel, getStorageMode } from './storage-mode';
+import { getStorageInfo, type StorageInfo } from './storage-mode';
 
 @Controller('api/operations')
 export class OperationsController {
   @Get()
-  getOperations(): { storage: 'mock' | 'live'; label: string } {
-    return { storage: getStorageMode(), label: getStorageLabel() };
+  getOperations(): StorageInfo {
+    return getStorageInfo();
   }
 }
