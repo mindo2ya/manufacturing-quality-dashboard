@@ -16,8 +16,14 @@ function doPost(event) {
     else if (request.action === 'update') data = updateRow(spreadsheet, request);
     else if (request.action === 'savePhoto') data = savePhoto(request);
     else if (request.action === 'getPhoto') data = getPhoto(request.id);
+    else if (request.action === 'saveInspectionRecord') data = saveInspectionRecord(spreadsheet, request.record, request.defects);
+    else if (request.action === 'listInspectionRecords') data = listInspectionRecords(spreadsheet, request.inspection_id);
     else if (request.action === 'saveGeminiResult') data = saveGeminiResult(spreadsheet, request.record);
     else if (request.action === 'listGeminiResults') data = listGeminiResults(spreadsheet, request.inspection_id);
+    else if (request.action === 'saveEvidenceQuery') data = saveEvidenceQuery(spreadsheet, request.record);
+    else if (request.action === 'listEvidenceQueries') data = listEvidenceQueries(spreadsheet, request.inspection_id);
+    else if (request.action === 'saveEvidenceLink') data = saveEvidenceLink(spreadsheet, request.record);
+    else if (request.action === 'listEvidenceLinks') data = listEvidenceLinks(spreadsheet, request.inspection_id);
     else if (request.action === 'runGemini') data = runGemini(request);
     else if (request.action === 'setOnePortKey') data = setOnePortKey(request.key);
     else throw new Error('지원하지 않는 일입니다.');
@@ -46,6 +52,18 @@ function setupStorage() {
     'content_version',
   ]);
   ensureSheetHeaders(spreadsheet, 'images', ['inspection_id', 'position', 'image_url']);
+  ensureSheetHeaders(spreadsheet, 'inspection_records', [
+    'record_id',
+    'inspection_id',
+    'user_id',
+    'recorded_at',
+    'decision',
+    'weight_g',
+    'notes',
+    'content_version',
+    'change_reason',
+  ]);
+  ensureSheetHeaders(spreadsheet, 'record_defects', ['record_id', 'defect_code']);
   ensureSheetHeaders(spreadsheet, 'gemini_results', [
     'result_id',
     'inspection_id',
@@ -58,6 +76,28 @@ function setupStorage() {
     'weight_g',
     'images',
     'result',
+  ]);
+  ensureSheetHeaders(spreadsheet, 'evidence_queries', [
+    'query_id',
+    'inspection_id',
+    'draft_id',
+    'created_at',
+    'mode',
+    'revision',
+    'prompt_name',
+    'question',
+    'answer',
+    'sources',
+  ]);
+  ensureSheetHeaders(spreadsheet, 'evidence_links', [
+    'link_id',
+    'query_id',
+    'inspection_id',
+    'draft_id',
+    'status',
+    'memo',
+    'user',
+    'created_at',
   ]);
   removeEmptyDefaultSheet(spreadsheet);
 
@@ -154,6 +194,22 @@ function readSheets(spreadsheet, tabNames) {
     });
   });
   return result;
+}
+
+function readSheetRows(sheet) {
+  const lastRow = sheet.getLastRow();
+  const lastColumn = sheet.getLastColumn();
+  if (lastRow < 2 || lastColumn === 0) return [];
+
+  const values = sheet.getRange(1, 1, lastRow, lastColumn).getValues();
+  const headers = values[0];
+  return values.slice(1).filter((row) => row.some((value) => value !== '' && value !== null)).map((row) => {
+    const item = {};
+    headers.forEach((header, index) => {
+      if (header !== '' && header !== null) item[header] = readCellValue(row[index]);
+    });
+    return item;
+  });
 }
 
 function appendRows(spreadsheet, rowsByTab) {
@@ -271,6 +327,75 @@ function getPhoto(fileId) {
   throw createUserError('등록된 사진이 없습니다.');
 }
 
+function saveInspectionRecord(spreadsheet, record, defects) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    throw createUserError('판단을 확인하세요.');
+  }
+  if (
+    typeof record.record_id !== 'string' ||
+    typeof record.inspection_id !== 'string' ||
+    typeof record.user_id !== 'string' ||
+    typeof record.recorded_at !== 'string' ||
+    !['OK', 'NG', 'HOLD'].includes(record.decision) ||
+    (record.weight_g !== null && typeof record.weight_g !== 'number') ||
+    typeof record.notes !== 'string' ||
+    typeof record.content_version !== 'number' ||
+    typeof record.change_reason !== 'string' ||
+    !Array.isArray(defects) ||
+    defects.some((code) => !['D01', 'D02', 'D03', 'D04'].includes(code))
+  ) {
+    throw createUserError('판단을 확인하세요.');
+  }
+
+  const inspectionSheet = spreadsheet.getSheetByName('inspections');
+  const inspectionHeaders = inspectionSheet ? getSheetHeaders(inspectionSheet) : [];
+  const idColumn = inspectionHeaders.indexOf('inspection_id');
+  if (!inspectionSheet || idColumn < 0 || inspectionSheet.getLastRow() < 2) {
+    throw createUserError('검사를 찾을 수 없습니다.');
+  }
+  const ids = inspectionSheet.getRange(2, idColumn + 1, inspectionSheet.getLastRow() - 1, 1).getValues();
+  if (!ids.some((row) => readCellValue(row[0]) === record.inspection_id)) {
+    throw createUserError('검사를 찾을 수 없습니다.');
+  }
+
+  appendRows(spreadsheet, {
+    inspection_records: [record],
+    record_defects: defects.map((defect_code) => ({ record_id: record.record_id, defect_code })),
+  });
+  updateRow(spreadsheet, {
+    tab: 'inspections',
+    key: 'inspection_id',
+    value: record.inspection_id,
+    changes: { content_version: record.content_version },
+  });
+  return { saved: 1 };
+}
+
+function listInspectionRecords(spreadsheet, inspectionId) {
+  if (inspectionId !== undefined && typeof inspectionId !== 'string') {
+    throw createUserError('검사번호를 확인하세요.');
+  }
+
+  const recordSheet = spreadsheet.getSheetByName('inspection_records');
+  const defectSheet = spreadsheet.getSheetByName('record_defects');
+  const records = recordSheet
+    ? readSheetRows(recordSheet)
+      .filter((row) => inspectionId === undefined || row.inspection_id === inspectionId)
+      .map((row) => ({
+        ...row,
+        weight_g: row.weight_g === '' || row.weight_g === null ? null : Number(row.weight_g),
+        notes: row.notes === '' || row.notes === null ? '' : String(row.notes),
+        change_reason: row.change_reason === '' || row.change_reason === null ? '' : String(row.change_reason),
+        content_version: Number(row.content_version) || 0,
+      }))
+    : [];
+  const recordIds = new Set(records.map((record) => record.record_id));
+  const defects = defectSheet
+    ? readSheetRows(defectSheet).filter((row) => recordIds.has(row.record_id))
+    : [];
+  return { records: records, defects: defects };
+}
+
 function saveGeminiResult(spreadsheet, record) {
   if (!record || typeof record !== 'object' || Array.isArray(record)) {
     throw createUserError('판독 결과를 확인하세요.');
@@ -305,6 +430,55 @@ function listGeminiResults(spreadsheet, inspectionId) {
       result: parseGeminiJsonCell(row.result, {}),
     }));
   return { results: rows };
+}
+
+function saveEvidenceQuery(spreadsheet, record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    throw createUserError('근거 답을 확인하세요.');
+  }
+  if (typeof record.sources !== 'string') {
+    throw createUserError('근거 답의 출처는 JSON 글이어야 합니다.');
+  }
+  try {
+    JSON.parse(record.sources);
+  } catch (error) {
+    throw createUserError('근거 답의 출처를 읽을 수 없습니다.');
+  }
+  const appended = appendRows(spreadsheet, { evidence_queries: [record] });
+  return { saved: appended.added };
+}
+
+function listEvidenceQueries(spreadsheet, inspectionId) {
+  if (inspectionId !== undefined && typeof inspectionId !== 'string') {
+    throw createUserError('검사번호를 확인하세요.');
+  }
+  const sheet = spreadsheet.getSheetByName('evidence_queries');
+  if (!sheet) return { queries: [] };
+
+  const queries = readSheetRows(sheet)
+    .filter((row) => inspectionId === undefined || row.inspection_id === inspectionId)
+    .map((row) => ({ ...row, sources: parseGeminiJsonCell(row.sources, []) }));
+  return { queries: queries };
+}
+
+function saveEvidenceLink(spreadsheet, record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    throw createUserError('대조 기록을 확인하세요.');
+  }
+  const appended = appendRows(spreadsheet, { evidence_links: [record] });
+  return { saved: appended.added };
+}
+
+function listEvidenceLinks(spreadsheet, inspectionId) {
+  if (inspectionId !== undefined && typeof inspectionId !== 'string') {
+    throw createUserError('검사번호를 확인하세요.');
+  }
+  const sheet = spreadsheet.getSheetByName('evidence_links');
+  if (!sheet) return { links: [] };
+
+  const links = readSheetRows(sheet)
+    .filter((row) => inspectionId === undefined || row.inspection_id === inspectionId);
+  return { links: links };
 }
 
 function parseGeminiJsonCell(value, fallback) {

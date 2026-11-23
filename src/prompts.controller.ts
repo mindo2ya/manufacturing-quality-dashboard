@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Post } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Post, Query } from '@nestjs/common';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -11,14 +11,15 @@ interface PromptRecord {
 interface SavedPrompt {
   name: string;
   text: string;
+  kind?: 'gemini' | 'notebooklm';
 }
 
 const defaultPromptNames = ['v1', 'v2', 'v3'] as const;
 
-function getDefaultPrompts(): PromptRecord[] {
+function getDefaultPrompts(kind: 'gemini' | 'notebooklm' = 'gemini'): PromptRecord[] {
   return defaultPromptNames.map((name) => ({
     name,
-    text: readFileSync(path.join(process.cwd(), 'prompts', `gemini-${name}.md`), 'utf8'),
+    text: readFileSync(path.join(process.cwd(), 'prompts', `${kind}-${name}.md`), 'utf8'),
     custom: false,
   }));
 }
@@ -36,12 +37,13 @@ function readCustomPrompts(): SavedPrompt[] {
   return value.filter(
     (item): item is SavedPrompt =>
       typeof item?.name === 'string' && typeof item?.text === 'string',
-  );
+  ).map((item) => ({ ...item, kind: item.kind === 'notebooklm' ? 'notebooklm' : 'gemini' }));
 }
 
-export function findPrompt(name: string): SavedPrompt | undefined {
-  const defaults = getDefaultPrompts().map(({ name: promptName, text }) => ({ name: promptName, text }));
-  return [...defaults, ...readCustomPrompts()].find((prompt) => prompt.name === name);
+export function findPrompt(name: string, kind: 'gemini' | 'notebooklm' = 'gemini'): SavedPrompt | undefined {
+  const defaults = getDefaultPrompts(kind).map(({ name: promptName, text }) => ({ name: promptName, text }));
+  return [...defaults, ...readCustomPrompts().filter((prompt) => prompt.kind === kind)]
+    .find((prompt) => prompt.name === name);
 }
 
 function getKoreanTimestamp(): string {
@@ -60,22 +62,27 @@ function getKoreanTimestamp(): string {
 @Controller('api/prompts')
 export class PromptsController {
   @Get()
-  getPrompts(): { default: string; prompts: PromptRecord[] } {
+  getPrompts(@Query('kind') kindValue?: string): { default: string; prompts: PromptRecord[] } {
+    const kind = kindValue === 'notebooklm' ? 'notebooklm' : 'gemini';
     return {
       default: 'v3',
       prompts: [
-        ...getDefaultPrompts(),
-        ...readCustomPrompts().map((prompt) => ({ ...prompt, custom: true })),
+        ...getDefaultPrompts(kind),
+        ...readCustomPrompts()
+          .filter((prompt) => prompt.kind === kind)
+          .map((prompt) => ({ ...prompt, custom: true })),
       ],
     };
   }
 
   @Post()
-  savePrompt(@Body() body: { base?: unknown; text?: unknown }): PromptRecord {
+  savePrompt(@Body() body: { base?: unknown; text?: unknown; kind?: unknown }): PromptRecord {
+    const kind = body?.kind === undefined ? 'gemini' : body.kind;
     if (
       typeof body?.base !== 'string' ||
       !defaultPromptNames.includes(body.base as (typeof defaultPromptNames)[number]) ||
-      typeof body.text !== 'string'
+      typeof body.text !== 'string' ||
+      (kind !== 'gemini' && kind !== 'notebooklm')
     ) {
       throw new BadRequestException('지시문 버전과 내용을 확인하세요.');
     }
@@ -83,6 +90,7 @@ export class PromptsController {
     const saved: SavedPrompt = {
       name: `${body.base} · 수정본 ${getKoreanTimestamp()}`,
       text: body.text,
+      kind,
     };
     const filePath = getCustomPromptsPath();
     mkdirSync(path.dirname(filePath), { recursive: true });

@@ -6,12 +6,24 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { ApiExceptionFilter } from './api-exception.filter';
 import { AppModule } from './app.module';
-import { getGeminiInfo, getStorageInfo } from './storage-mode';
+import {
+  getGeminiInfo,
+  getNotebookLMInfo,
+  getStorageInfo,
+  validateNotebookLMMode,
+} from './storage-mode';
 
 async function bootstrap(): Promise<void> {
   const geminiInfo = getGeminiInfo();
   if (geminiInfo.error) {
     console.error(geminiInfo.error);
+    process.exitCode = 1;
+    return;
+  }
+  try {
+    validateNotebookLMMode();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : 'NOTEBOOKLM_MODE 설정을 확인하세요.');
     process.exitCode = 1;
     return;
   }
@@ -71,6 +83,23 @@ async function bootstrap(): Promise<void> {
   await app.listen(port, '127.0.0.1');
   console.log(`품질 대시보드 서버 실행 중: http://127.0.0.1:${port}`);
   console.log(`저장소: ${getStorageInfo().label}`);
+  const storage = getStorageInfo();
+  const gemini = getGeminiInfo();
+  const notebookLM = getNotebookLMInfo();
+  const storageStatus = storage.storage === 'mock' ? '로컬 파일' : 'GAS 웹앱';
+  const geminiStatus: Record<string, string> = {
+    off: '사람이 직접 판정',
+    mock: '모의 초안',
+    live: 'GAS에서 OnePort로 Gemini 호출',
+  };
+  const notebookLMStatus: Record<string, string> = {
+    off: '근거 대조 꺼짐',
+    mock: '모의 응답',
+    live: '실제 질의',
+  };
+  console.log(
+    `연동 상태: 저장소=${storage.storage}(${storageStatus}) · Gemini=${gemini.mode}(${geminiStatus[gemini.mode]}) · NotebookLM=${notebookLM.mode}(${notebookLMStatus[notebookLM.mode]})`,
+  );
 }
 
 void bootstrap();
