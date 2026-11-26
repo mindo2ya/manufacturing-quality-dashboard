@@ -13,9 +13,10 @@ import { GeminiResultStore } from './gemini-result.store';
 import { EvidenceQueryStore } from './evidence-query.store';
 import { EvidenceLinkStore } from './evidence-link.store';
 import { NotebookLMClient } from './notebooklm.client';
+import { DashboardController } from './dashboard.controller';
 
 @Module({
-  controllers: [AuthController, CatalogController, InspectionsController, HomeController, OperationsController, DrivePhotoController, PromptsController, ApiFallbackController],
+  controllers: [AuthController, CatalogController, InspectionsController, HomeController, DashboardController, OperationsController, DrivePhotoController, PromptsController, ApiFallbackController],
   providers: [InspectionStore, GoogleWebAppClient, GeminiResultStore, EvidenceQueryStore, EvidenceLinkStore, NotebookLMClient],
 })
 export class AppModule {}

@@ -79,6 +79,18 @@ export class GeminiResultStore {
     return new Set(results.map((record) => record.inspection_id));
   }
 
+  /** 검사마다 가장 최근 판독 결과 하나 (대시보드용) */
+  async getLatestResultsByInspection(): Promise<Map<string, GeminiResultRecord>> {
+    const latestByInspection = new Map<string, GeminiResultRecord>();
+    for (const result of await this.readResults()) {
+      const latest = latestByInspection.get(result.inspection_id);
+      if (!latest || result.created_at.localeCompare(latest.created_at) > 0) {
+        latestByInspection.set(result.inspection_id, result);
+      }
+    }
+    return latestByInspection;
+  }
+
   async getReviewPendingInspectionIds(inspections: Inspection[]): Promise<Set<string>> {
     let results: GeminiResultRecord[];
     let links: EvidenceLinkRecord[];
